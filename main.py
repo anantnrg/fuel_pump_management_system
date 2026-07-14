@@ -7,7 +7,7 @@ WIDTH = 96
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "",
+    "password": "root",
     "database": "FuelInventoryDB",
 }
 
@@ -49,7 +49,7 @@ def draw_screen(title_text, content):
     for _ in range(max(0, 12 - len(content))):
         line()
     middle()
-    line("Q = Quit | B = Back")
+    line("Q = Quit | B = Go Back")
     bottom()
 
 
@@ -114,14 +114,12 @@ def connect_server():
 
 
 def connect_database():
-    try:
-        return mysql.connector.connect(**DB_CONFIG)
-    except mysql.connector.Error as error:
-        if error.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            show_error("Access denied. Update database settings.")
-            prompt_database_settings()
-            return connect_database()
-        raise
+    while True:
+        try:
+            return mysql.connector.connect(**DB_CONFIG)
+
+        except mysql.connector.Error as error:
+            show_error(str(error))
 
 
 def execute_query(query, params=None, commit=False):
@@ -215,17 +213,8 @@ def show_error(message):
     show_message("ERROR", [message])
 
 
-def prompt_database_settings():
-    draw_screen(
-        "DATABASE SETTINGS",
-        ["Enter database connection details.", "If unsure, ask your administrator."],
-    )
-    DB_CONFIG["host"] = get_input("Host", default=DB_CONFIG["host"], required=True)
-    DB_CONFIG["user"] = get_input("User", default=DB_CONFIG["user"], required=True)
-    DB_CONFIG["password"] = input("Password []: ").strip()
-    DB_CONFIG["database"] = get_input(
-        "Database", default=DB_CONFIG["database"], required=True
-    )
+def confirm(message):
+    return input(f"\n{message} (Y/N): ").strip().upper() == "Y"
 
 
 def create_schema(cursor):
@@ -356,6 +345,9 @@ def add_item():
     quantity = get_float("Initial stock quantity", default=0, minimum=0)
     reorder = get_float("Reorder level", default=0, minimum=0)
     item_id = get_next_id("Items", "itemid")
+    if not confirm("Add this item"):
+        show_message("CANCELLED", ["Item was not added."])
+        return
     execute_non_query(
         "INSERT INTO Items (itemid, itemname, categoryid, unit, sellingprice) VALUES (%s, %s, %s, %s, %s)",
         (item_id, name, category_id, unit, price),
@@ -392,6 +384,9 @@ def update_item():
     unit = get_input("Unit", default=unit, required=True)
     price = get_float("Selling price", default=price, minimum=0)
     reorder = get_float("Reorder level", default=reorder, minimum=0)
+    if not confirm(f"Save changes to '{name}'"):
+        show_message("CANCELLED", ["Item was not updated."])
+        return
     execute_non_query(
         "UPDATE Items SET itemname = %s, categoryid = %s, unit = %s, sellingprice = %s WHERE itemid = %s",
         (name, category_id, unit, price, item_id),
@@ -422,6 +417,9 @@ def delete_item():
         show_error("Item not found.")
         return
     name = item[0]
+    if not confirm(f"Delete item '{name}'?"):
+        show_message("CANCELLED", ["Item was not deleted."])
+        return
     try:
         execute_non_query("DELETE FROM Stock WHERE itemid = %s", (item_id,))
         execute_non_query("DELETE FROM Items WHERE itemid = %s", (item_id,))
@@ -435,6 +433,9 @@ def add_supplier():
     phone = get_input("Phone", required=True)
     address = get_input("Address", required=True)
     supplier_id = get_next_id("Suppliers", "supplierid")
+    if not confirm("Add this supplier?"):
+        show_message("CANCELLED", ["Supplier was not added."])
+        return
     execute_non_query(
         "INSERT INTO Suppliers (supplierid, suppliername, phone, address) VALUES (%s, %s, %s, %s)",
         (supplier_id, name, phone, address),
@@ -462,6 +463,9 @@ def update_supplier():
     name = get_input("Supplier name", default=name, required=True)
     phone = get_input("Phone", default=phone, required=True)
     address = get_input("Address", default=address, required=True)
+    if not confirm(f"Save changes to '{name}'?"):
+        show_message("CANCELLED", ["Supplier was not updated."])
+        return
     execute_non_query(
         "UPDATE Suppliers SET suppliername = %s, phone = %s, address = %s WHERE supplierid = %s",
         (name, phone, address, supplier_id),
@@ -485,6 +489,9 @@ def delete_supplier():
         show_error("Supplier not found.")
         return
     name = supplier[0]
+    if not confirm(f"Delete supplier '{name}'?"):
+        show_message("CANCELLED", ["Supplier was not deleted."])
+        return
     try:
         execute_non_query("DELETE FROM Suppliers WHERE supplierid = %s", (supplier_id,))
         show_message("SUPPLIER DELETED", [f"Supplier '{name}' has been removed."])
@@ -533,6 +540,9 @@ def add_purchase():
         detail_id += 1
         if input("Add another item? (Y/N): ").strip().upper() != "Y":
             break
+    if not confirm(f"Save purchase with total amount {total_amount:.2f}?"):
+        show_message("CANCELLED", ["Purchase was not saved."])
+        return
     execute_non_query(
         "INSERT INTO Purchases (purchaseid, supplierid, purchasedate, totalamount) VALUES (%s, %s, %s, %s)",
         (purchase_id, supplier_id, purchase_date, total_amount),
@@ -577,14 +587,18 @@ def add_sale():
     if stock_qty <= 0:
         show_error("Stock is not available for this item.")
         return
-    quantity = get_float("Quantity sold", required=True, minimum=1)
+    quantity = get_float("Enter quantity required", required=True, minimum=1)
     if quantity > stock_qty:
         show_error("Not enough stock for this sale.")
         return
-    rate = get_float("Price per unit", default=price, required=True, minimum=0)
+    print(f"\nCurrent price is {price:.2f}")
+    rate = get_float("Enter new price if changed", default=price, minimum=0)
     total = quantity * rate
     sale_id = get_next_id("Sales", "saleid")
     sale_date = datetime.date.today().isoformat()
+    if not confirm("Record this sale"):
+        show_message("CANCELLED", ["Sale cancelled."])
+        return
     execute_non_query(
         "INSERT INTO Sales (saleid, itemid, saledate, quantitysold, rate, totalamount) VALUES (%s, %s, %s, %s, %s, %s)",
         (sale_id, item_id, sale_date, quantity, rate, total),
@@ -765,7 +779,7 @@ def sales_report():
         FROM Sales Sa
         JOIN Items I
         ON Sa.itemid=I.itemid
-        ORDER BY Sa.saledate DESC
+        ORDER BY Sa.saleid
         """,
     )
 
@@ -783,7 +797,7 @@ def purchase_report():
         FROM Purchases P
         JOIN Suppliers S
         ON P.supplierid=S.supplierid
-        ORDER BY P.purchasedate DESC
+        ORDER BY P.purchaseid
         """,
     )
 
